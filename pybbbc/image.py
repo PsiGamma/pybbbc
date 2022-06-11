@@ -45,7 +45,6 @@ def convert_to_8bit_range(images: np.ndarray):
     if images.ndim == 2:
         # make into stack
         shape = images.shape
-        st.write(shape)
         images = images.reshape(1,shape[0],shape[1])
     n_images = len(images)
     for i in range(n_images):
