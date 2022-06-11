@@ -19,7 +19,7 @@ from tqdm.contrib.concurrent import process_map
 
 from pybbbc import constants
 
-from .image import correct_illumination, scale_pixel_intensity
+from .image import correct_illumination, scale_pixel_intensity, anscombe_transform, normalize_pixel_intensity_dmso, get_dmso_statistics, convert_to_8bit_range
 from .utils import download_file, get_paths
 
 
@@ -277,6 +277,23 @@ def process_channel(channel, channel_idx, plate_df, plate_dir, plate_h5):
     )
     sites_tqdm = tqdm(total=constants.N_SITES, desc="Sites", leave=False)
 
+    # compute dmso statistics per channel
+    plate_dmso_idx = plate_df['Image_Metadata_Compound'] == 'DMSO'
+    filenames_dmso = plate_df.loc[
+             plate_dmso_idx,
+            "Image_FileName_{}".format(channel),
+    ].tolist()
+
+    dmso_images = []
+    for i, filename in enumerate(filenames_dmso):
+        img = io.imread(plate_dir / filename).astype(np.float32)
+        dmso_images.append(img)
+
+    dmso_images = np.stack(dmso_images)
+    dmso_images_anscombe = anscombe_transform(dmso_images)
+    stats = get_dmso_statistics(dmso_images_anscombe)
+
+
     for s in range(1, constants.N_SITES + 1):
 
         # get filenames of images with site s
@@ -293,6 +310,27 @@ def process_channel(channel, channel_idx, plate_df, plate_dir, plate_h5):
             img = io.imread(plate_dir / filename).astype(np.float16)
             channel_imgs[(s - 1) * len(filenames) + i] = img
             filenames_tqdm.update(1)
+
+        # apply DMSO-based intensity correction on anscombe-transformed images
+        filenames_tqdm.set_description("Computing DMSO-based correction")
+        channel_imgs[
+            (s - 1) * len(filenames) : (s) * len(filenames)
+        ] = normalize_pixel_intensity_dmso(
+            anscombe_transform(channel_imgs[(s - 1) * len(filenames) : (s) * len(filenames)]),
+            stats[0],
+            stats[1]
+        )
+
+        # map back to positive number range
+        # actually, this step should be performed relative to the
+        # intensity statistics of each individual image 
+        filenames_tqdm.set_description("Re-mapping to positive range")
+        channel_imgs[
+            (s - 1) * len(filenames) : (s) * len(filenames)
+        ] = convert_to_8bit_range(
+            channel_imgs[(s - 1) * len(filenames) : (s) * len(filenames)]
+        )        
+        
 
         # compute and apply illumination correction
         filenames_tqdm.set_description("Computing illumination correction")
